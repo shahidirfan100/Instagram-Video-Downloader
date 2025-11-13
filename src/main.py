@@ -190,6 +190,11 @@ if FFMPEG_AVAILABLE:
 else:
     BASE_YDL_OPTS.update({
         'format_sort': ['res', 'fps', 'ext:mp4:m4a'],
+        'allow_multiple_audio_streams': False,
+        'allow_multiple_video_streams': False,
+        'prefer_ffmpeg': False,  # Don't prefer ffmpeg for merging
+        'keepvideo': False,  # Don't keep video when extracting audio
+        'extract_audio': False,  # Don't extract audio by default
     })
 
 # Quality labels retained for reference (fallback helper uses these)
@@ -218,8 +223,9 @@ def _build_format_candidates(quality: str | None) -> List[str]:
             ]
         else:
             candidates = [
-                'best[height<=1080]',
                 'bestvideo[height<=1080]',
+                'best[height<=1080]',
+                'bestvideo',
                 'best',
             ]
     elif q in {'720p', '720'}:
@@ -233,8 +239,9 @@ def _build_format_candidates(quality: str | None) -> List[str]:
             ]
         else:
             candidates = [
-                'best[height<=720]',
                 'bestvideo[height<=720]',
+                'best[height<=720]',
+                'bestvideo',
                 'best',
             ]
     else:
@@ -247,8 +254,8 @@ def _build_format_candidates(quality: str | None) -> List[str]:
             ]
         else:
             candidates = [
-                'best',
                 'bestvideo',
+                'best',
                 'bestaudio',
             ]
 
@@ -920,7 +927,15 @@ async def download_video_file(
     format_candidates = _build_format_candidates(quality)
 
     # Use the first format candidate - yt-dlp will handle fallbacks internally
-    selected_format = format_candidates[0] if format_candidates else 'best'
+    selected_format = format_candidates[0] if format_candidates else 'bestvideo'  # Default to bestvideo when ffmpeg unavailable
+
+    # If ffmpeg is not available, ensure we don't use merging formats
+    if not FFMPEG_AVAILABLE and ('+' in selected_format or '*' in selected_format or 'bestaudio' in selected_format):
+        # For video downloads, prefer video-only formats
+        if quality.lower() not in ['audio_only', 'audio']:
+            selected_format = 'bestvideo'
+        else:
+            selected_format = 'bestaudio'
 
     with tempfile.TemporaryDirectory() as temp_dir:
         opts = get_ydl_opts('videos', quality, proxy_url, 0, cookies, url)
@@ -953,7 +968,7 @@ async def download_video_file(
 
         _clear_directory(temp_dir)
 
-        Actor.log.info(f"Download using format '{opts['format']}'")
+        Actor.log.info(f"Download using format '{selected_format}' (ffmpeg available: {FFMPEG_AVAILABLE})")  # type: ignore
 
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:

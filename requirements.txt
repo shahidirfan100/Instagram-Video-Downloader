@@ -1,4 +1,4 @@
 apify<4.0.0
 yt-dlp
 scrapling
-ffmpeg-python==0.2.0
+# ffmpeg-python  # Optional: only needed for audio extraction with merging
