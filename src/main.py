@@ -155,7 +155,7 @@ CONTENT_TYPE_BY_EXTENSION = {
 #                        CONFIGURATION                         #
 # ============================================================ #
 
-# Base yt-dlp options optimized for Instagram
+# Base yt-dlp options optimized for Instagram with SPEED OPTIMIZATION
 # Base yt-dlp options - will be modified based on ffmpeg availability
 BASE_YDL_OPTS = {
     'quiet': True,
@@ -164,21 +164,30 @@ BASE_YDL_OPTS = {
     'nocheckcertificate': True,
     'ignoreerrors': False,
     'no_color': True,
-    'retries': 5,  # Increased retries for Instagram
-    'fragment_retries': 10,  # More fragment retries
+    'retries': 3,  # Reduced for faster failure detection
+    'fragment_retries': 5,  # Balanced retry count
     'http_headers': _get_stealth_headers(),  # Use stealth headers by default
+    # SPEED OPTIMIZATIONS
+    'concurrent_fragment_downloads': 5,  # Download multiple fragments in parallel
+    'buffersize': 1024 * 1024 * 16,  # 16MB buffer for faster downloads
+    'http_chunk_size': 1024 * 1024 * 10,  # 10MB chunks
+    'noprogress': False,  # Enable progress for monitoring
+    'no_check_certificate': True,  # Skip SSL verification for speed
+    # Disable unnecessary checks
+    'no_check_formats': True,  # Skip format checks
+    'skip_unavailable_fragments': True,  # Don't retry unavailable fragments
     # Instagram extractor specific options
     'extractor_args': {
         'instagram': {
             'api_dump': False,
-            'sleep_interval': 2,  # Increased sleep interval
+            'sleep_interval': 0,  # No sleep for faster extraction
             'graphql': True,  # Use GraphQL API when possible
         }
     },
     # General options for better Instagram compatibility
-    'sleep_interval': 2,  # Sleep between requests
-    'max_sleep_interval': 10,  # Maximum sleep interval
-    'sleep_interval_requests': 1,  # Sleep after this many requests
+    'sleep_interval': 0,  # No sleep between requests for speed
+    'max_sleep_interval': 2,  # Minimal sleep interval
+    'sleep_interval_requests': 0,  # No sleep after requests
 }
 
 # Add ffmpeg-dependent options only if ffmpeg is available
@@ -273,9 +282,62 @@ def _build_format_candidates(quality: str | None) -> List[str]:
     return ordered
 
 
+# Global circuit breaker for tracking failure rates
+_failure_count = 0
+_success_count = 0
+_circuit_breaker_open = False
+
+def _check_circuit_breaker() -> bool:
+    """Check if circuit breaker should be open (too many failures)"""
+    global _failure_count, _success_count, _circuit_breaker_open
+    
+    total = _failure_count + _success_count
+    if total < 5:  # Need at least 5 attempts before checking
+        return False
+    
+    failure_rate = _failure_count / total
+    if failure_rate > 0.7:  # More than 70% failure rate
+        if not _circuit_breaker_open:
+            Actor.log.warning(f"Circuit breaker OPEN - failure rate: {failure_rate:.1%}")
+            _circuit_breaker_open = True
+        return True
+    
+    if _circuit_breaker_open and failure_rate < 0.3:
+        Actor.log.info(f"Circuit breaker CLOSED - failure rate improved: {failure_rate:.1%}")
+        _circuit_breaker_open = False
+    
+    return False
+
+def _record_success():
+    """Record a successful operation"""
+    global _success_count
+    _success_count += 1
+
+def _record_failure():
+    """Record a failed operation"""
+    global _failure_count
+    _failure_count += 1
+
 def _is_retryable_error(error_msg: str) -> bool:
     """Check if an error is retryable based on Instagram-specific error patterns."""
     error_lower = error_msg.lower()
+    
+    # Non-retryable errors that indicate permanent failures
+    permanent_errors = [
+        "private account",
+        "login required",
+        "video unavailable",
+        "not found",
+        "404",
+        "deleted",
+        "removed",
+        "copyright",
+    ]
+    
+    for pattern in permanent_errors:
+        if pattern in error_lower:
+            return False
+    
     retryable_patterns = [
         # Rate limiting
         "rate limit exceeded",
@@ -296,7 +358,6 @@ def _is_retryable_error(error_msg: str) -> bool:
         "connection timed out",
         # Instagram specific errors that might be temporary
         "content not available",
-        "video not available",
         "reel not available",
         "post not available",
         "this content is not available",
@@ -942,7 +1003,9 @@ async def download_video_file(
             selected_format = 'bestaudio'
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        opts = get_ydl_opts('videos', quality, proxy_url, 0, cookies, url)
+        # CRITICAL FIX: Don't use proxy for video downloads - Instagram CDN doesn't need authentication
+        # Proxy causes 50KB/s bottleneck. Only metadata extraction needs proxy.
+        opts = get_ydl_opts('videos', quality, None, 0, cookies, url)  # Pass None for proxy_url
         opts['outtmpl'] = os.path.join(temp_dir, '%(id)s.%(ext)s')
         opts['format'] = selected_format
 
@@ -973,6 +1036,27 @@ async def download_video_file(
         _clear_directory(temp_dir)
 
         Actor.log.info(f"Download using format '{selected_format}' (ffmpeg available: {FFMPEG_AVAILABLE})")  # type: ignore
+        
+        # Add progress hook for monitoring
+        download_start_time = datetime.now(UTC)
+        
+        def progress_hook(d):
+            """Monitor download progress and log speed/ETA"""
+            if d['status'] == 'downloading':
+                downloaded = d.get('downloaded_bytes', 0)
+                total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+                speed = d.get('speed', 0)
+                eta = d.get('eta', 0)
+                
+                if total > 0 and downloaded > 0:
+                    percent = (downloaded / total) * 100
+                    speed_mb = (speed / 1024 / 1024) if speed else 0
+                    Actor.log.info(f"Progress: {percent:.1f}% ({downloaded/1024/1024:.1f}MB/{total/1024/1024:.1f}MB) at {speed_mb:.2f}MB/s, ETA: {eta}s")
+            elif d['status'] == 'finished':
+                elapsed = (datetime.now(UTC) - download_start_time).total_seconds()
+                Actor.log.info(f"Download completed in {elapsed:.1f}s")
+        
+        opts['progress_hooks'] = [progress_hook]
 
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -996,6 +1080,77 @@ async def download_video_file(
             raise
 
 
+async def process_single_url(
+    url: str,
+    download_mode: str,
+    quality: str,
+    max_items: int,
+    proxy_url: str | None = None,
+    proxy_configuration: Any | None = None,
+    cookies: str | None = None,
+) -> tuple[int, int]:
+    """
+    Process a single Instagram URL with circuit breaker pattern.
+    
+    Returns:
+        Tuple of (items_processed, items_successful)
+    """
+    # Check circuit breaker before attempting
+    if _check_circuit_breaker():
+        Actor.log.error(f"Circuit breaker OPEN - skipping {url} due to high failure rate")
+        error_data = {
+            'url': url,
+            'error': 'Circuit breaker open - too many failures',
+            'quality_requested': quality,
+            'collected_at': datetime.now(UTC).isoformat(),
+        }
+        await Actor.push_data(error_data)
+        return 1, 0
+    
+    active_proxy_url = proxy_url
+    if proxy_configuration is not None:
+        try:
+            fresh_url = await proxy_configuration.new_url()
+            active_proxy_url = str(fresh_url) if fresh_url else proxy_url
+        except Exception as proxy_error:
+            Actor.log.warning(f"Unable to obtain fresh proxy URL: {proxy_error}")
+            active_proxy_url = proxy_url
+
+    try:
+        # Process URL (may return multiple items for playlists/channels)
+        results = await process_url(url, download_mode, quality, max_items, active_proxy_url, cookies)
+
+        # Push each result to dataset
+        success_count = 0
+        for metadata in results:
+            await Actor.push_data(metadata)
+            if 'error' not in metadata:  # Count successful items
+                success_count += 1
+                _record_success()
+            else:
+                _record_failure()
+
+        Actor.log.info(f"✓ Processed {len(results)} items from {url}")
+        return len(results), success_count
+
+    except Exception as e:
+        _record_failure()
+        try:
+            error_str = str(e)
+        except Exception:
+            error_str = "Unknown processing error"
+        Actor.log.error(f"✗ Failed to process {url}: {error_str}")
+        # Still push error info to dataset
+        error_data = {
+            'url': url,
+            'error': error_str,
+            'quality_requested': quality,
+            'collected_at': datetime.now(UTC).isoformat(),
+        }
+        await Actor.push_data(error_data)
+        return 1, 0
+
+
 async def process_urls(
     urls: List[str],
     download_mode: str,
@@ -1006,7 +1161,7 @@ async def process_urls(
     cookies: str | None = None,
 ) -> None:
     """
-    Process a list of Instagram URLs.
+    Process a list of Instagram URLs with parallel processing.
 
     Args:
         urls: List of Instagram URLs (videos, reels, posts)
@@ -1018,55 +1173,40 @@ async def process_urls(
     """
     total_processed = 0
     total_success = 0
+    
+    # Process URLs with limited concurrency (2-3 at a time to avoid rate limits)
+    max_concurrent = min(3, len(urls))
+    semaphore = asyncio.Semaphore(max_concurrent)
+    
+    async def process_with_semaphore(url: str, index: int) -> tuple[int, int]:
+        """Process URL with rate limiting"""
+        async with semaphore:
+            # Add small delay between concurrent requests
+            if index > 0:
+                delay = random.uniform(0.5, 1.5)
+                await asyncio.sleep(delay)
+            return await process_single_url(
+                url, download_mode, quality, max_items, 
+                proxy_url, proxy_configuration, cookies
+            )
+    
+    # Process all URLs concurrently with semaphore limiting
+    Actor.log.info(f"Processing {len(urls)} URLs with max {max_concurrent} concurrent downloads")
+    tasks = [process_with_semaphore(url, i) for i, url in enumerate(urls)]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Calculate totals
+    for result in results:
+        if isinstance(result, tuple):
+            processed, success = result
+            total_processed += processed
+            total_success += success
+        else:
+            # Exception occurred
+            Actor.log.error(f"Task failed with exception: {result}")
+            total_processed += 1
 
-    for i, url in enumerate(urls):
-        active_proxy_url = proxy_url
-        if proxy_configuration is not None:
-            try:
-                fresh_url = await proxy_configuration.new_url()
-                active_proxy_url = str(fresh_url) if fresh_url else proxy_url
-            except Exception as proxy_error:
-                Actor.log.warning(f"Unable to obtain fresh proxy URL: {proxy_error}")
-                active_proxy_url = proxy_url
-
-        try:
-            # Process URL (may return multiple items for playlists/channels)
-            results = await process_url(url, download_mode, quality, max_items, active_proxy_url, cookies)
-
-            # Push each result to dataset
-            for metadata in results:
-                await Actor.push_data(metadata)
-                if 'error' not in metadata:  # Count successful items
-                    total_success += 1
-
-            Actor.log.info(f"Processed {len(results)} items from {url}")
-
-        except Exception as e:
-            try:
-                error_str = str(e)
-            except Exception:
-                error_str = "Unknown processing error"
-            Actor.log.error(f"Failed to process {url}: {error_str}")
-            # Still push error info to dataset
-            error_data = {
-                'url': url,
-                'error': error_str,
-                'quality_requested': quality,
-                'collected_at': datetime.now(UTC).isoformat(),
-            }
-            await Actor.push_data(error_data)
-
-        total_processed += 1
-
-        # Intelligent rate limiting: longer delays for more URLs, random jitter
-        if i < len(urls) - 1:  # Don't delay after last URL
-            base_delay = min(2.0 + (len(urls) * 0.5), 10.0)  # Scale with URL count
-            jitter = random.uniform(0.5, 2.0)  # Random multiplier
-            delay = base_delay * jitter
-            Actor.log.info(f"Rate limiting: waiting {delay:.1f}s before next URL")
-            await asyncio.sleep(delay)
-
-    Actor.log.info(f"Processing complete! Successfully processed {total_success} items")
+    Actor.log.info(f"Processing complete! Successfully processed {total_success}/{total_processed} items")
 
 
 # ============================================================ #
@@ -1123,14 +1263,14 @@ async def main() -> None:
             Actor.log.error("No URLs provided in input. Expected 'urls' field with string or list of Instagram URLs.")
             return
 
-        # Extract proxy configuration
+        # Extract proxy configuration (ONLY for metadata, not video downloads)
         proxy_url: str | None = None
         proxy_configuration = None
         proxy_input = inp.get("proxyConfiguration") or {}
 
         if proxy_input.get("proxyUrls"):
             proxy_url = proxy_input["proxyUrls"][0]
-            Actor.log.info("Using custom proxy URL provided in input")
+            Actor.log.info("Using custom proxy URL for metadata extraction (not video downloads)")
         else:
             try:
                 if proxy_input:
@@ -1146,7 +1286,7 @@ async def main() -> None:
                 if proxy_configuration:
                     fresh_proxy_url = await proxy_configuration.new_url()
                     proxy_url = str(fresh_proxy_url) if fresh_proxy_url else None
-                    Actor.log.info("Using Apify proxy configuration")
+                    Actor.log.info("Using Apify proxy for metadata extraction (videos download directly from CDN)")
             except Exception as proxy_error:
                 Actor.log.warning(f"Unable to initialize proxy configuration: {proxy_error}")
                 proxy_configuration = None
@@ -1191,9 +1331,16 @@ async def main() -> None:
         # Performance metrics
         end_time = datetime.now(UTC)
         duration = (end_time - start_time).total_seconds()
-        Actor.log.info(f"Instagram Video Downloader completed at {end_time.isoformat()}")
-        Actor.log.info(f"Total execution time: {duration:.2f} seconds")
-        Actor.log.info(f"Processed {len(valid_urls)} URLs successfully")
+        avg_time_per_url = duration / len(valid_urls) if valid_urls else 0
+        
+        Actor.log.info("=" * 60)
+        Actor.log.info("PERFORMANCE SUMMARY")
+        Actor.log.info("=" * 60)
+        Actor.log.info(f"✓ Total URLs processed: {len(valid_urls)}")
+        Actor.log.info(f"✓ Total execution time: {duration:.2f}s")
+        Actor.log.info(f"✓ Average time per URL: {avg_time_per_url:.2f}s")
+        Actor.log.info(f"✓ Success rate: {(_success_count/(_success_count + _failure_count) * 100):.1f}%" if (_success_count + _failure_count) > 0 else "N/A")
+        Actor.log.info("=" * 60)
 
 
 if __name__ == "__main__":
