@@ -189,12 +189,16 @@ if FFMPEG_AVAILABLE:
     })
 else:
     BASE_YDL_OPTS.update({
+        'noplaylist': True,  # Don't download playlists, only single videos
+        'extract_flat': False,  # Don't extract playlist info
+        'playlist_items': None,  # Don't limit playlist items
         'format_sort': ['res', 'fps', 'ext:mp4:m4a'],
         'allow_multiple_audio_streams': False,
         'allow_multiple_video_streams': False,
         'prefer_ffmpeg': False,  # Don't prefer ffmpeg for merging
         'keepvideo': False,  # Don't keep video when extracting audio
         'extract_audio': False,  # Don't extract audio by default
+        'format': 'bestvideo/best',  # Explicitly prefer video-only formats
     })
 
 # Quality labels retained for reference (fallback helper uses these)
