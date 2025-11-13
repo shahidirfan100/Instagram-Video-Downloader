@@ -1,0 +1,55 @@
+{
+  "title": "Instagram Video Downloader Input",
+  "description": "Download Instagram videos and extract metadata. Supports single videos, reels, and batch downloads. Can download full videos or extract metadata only.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "urls": {
+      "title": "Instagram URLs",
+  "description": "Instagram URL(s) to process. You can provide:\n- A single URL\n- Multiple URLs one per line\n- Comma-separated URLs\n- JSON array format: [\"url1\", \"url2\"]\n\nExamples:\nSingle: https://instagram.com/user/p/VIDEO_ID\nMultiple lines:\nhttps://instagram.com/user1/p/123\nhttps://instagram.com/user2/reel/456\nJSON: [\"https://instagram.com/...\", \"https://instagram.com/...\"]",
+  "type": "string",
+  "editor": "textarea",
+  "prefill": "https://instagram.com/user/p/VIDEO_ID"
+    },
+    "downloadMode": {
+      "title": "Download Mode",
+      "type": "string",
+      "description": "Choose whether to download full videos or extract metadata only.",
+      "enum": ["videos", "metadata_only"],
+      "enumTitles": ["Download Videos", "Metadata Only"],
+      "default": "videos",
+      "editor": "select"
+    },
+    "maxItems": {
+      "title": "Maximum Items",
+      "type": "integer",
+      "description": "Maximum number of videos to process from playlists or channels. Set to 0 for unlimited (not recommended for large playlists).",
+      "minimum": 0,
+      "default": 10,
+      "editor": "number"
+    },
+    "quality": {
+      "title": "Video Quality",
+      "type": "string",
+  "description": "Preferred video quality/format. Only applies when downloading videos. The actor automatically falls back to lower or best available qualities if the requested one is missing.",
+      "enum": ["best", "720p", "1080p", "audio_only"],
+      "enumTitles": ["Best Available", "Up to 720p", "Up to 1080p", "Audio Only (MP3)"],
+      "default": "best",
+      "editor": "select"
+    },
+    "cookies": {
+      "title": "Instagram Cookies (optional)",
+      "type": "string",
+      "description": "Optional cookies to bypass Instagram authentication. Accepts both JSON format (from browser dev tools) and Netscape format. JSON cookies will be automatically converted. Leave empty if videos are publicly accessible.",
+      "editor": "textarea"
+    },
+    "proxyConfiguration": {
+      "title": "Proxy Configuration",
+      "type": "object",
+      "description": "Proxy settings for downloading Instagram videos. Recommended to use Apify Proxy to avoid potential rate limiting or IP blocking.",
+      "editor": "proxy",
+      "default": {}
+    }
+  },
+  "required": ["urls"]
+}
