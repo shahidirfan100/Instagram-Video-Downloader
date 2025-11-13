@@ -54,13 +54,20 @@ except ImportError:
         async def create_proxy_configuration(**kwargs):
             return None
 
-# Realistic user agents for Instagram
+# Realistic user agents for Instagram (mobile and desktop)
 USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+    # Mobile user agents (Instagram is primarily mobile)
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (Android 13; Mobile; rv:109.0) Gecko/113.0 Firefox/113.0',
+    'Mozilla/5.0 (Android 13; Mobile; LG-M255; rv:109.0) Gecko/113.0 Firefox/113.0',
+    'Mozilla/5.0 (Linux; Android 10; SM-G975F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36',
+    'Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36',
+    # Desktop user agents
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
 ]
 
 
@@ -84,13 +91,26 @@ def _get_stealth_headers(url: str = None) -> Dict[str, str]:
         'Sec-Fetch-Site': 'none',
         'Sec-Fetch-User': '?1',
         'Cache-Control': 'max-age=0',
-        'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        'sec-ch-ua': '"Google Chrome";v="119", "Chromium";v="119", "Not?A_Brand";v="24"',
         'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
+        'sec-ch-ua-platform': '"macOS"',
+        'Sec-Purpose': 'prefetch',
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-Instagram-AJAX': '1',
+        'X-CSRFToken': 'missing',
+        'X-IG-App-ID': '936619743392459',  # Instagram App ID
+        'X-IG-WWW-Claim': 'hmac.AR0PlvPj9Q2WjxLjKwJnjA',
     }
 
     if url and 'instagram.com' in url:
         base_headers['Referer'] = 'https://www.instagram.com/'
+        # Add Instagram-specific headers for authenticated requests
+        base_headers.update({
+            'X-Requested-With': 'XMLHttpRequest',
+            'X-Instagram-AJAX': '1',
+            'X-CSRFToken': 'missing',
+            'X-IG-App-ID': '936619743392459',
+        })
 
     return base_headers
 try:
@@ -144,15 +164,21 @@ BASE_YDL_OPTS = {
     'nocheckcertificate': True,
     'ignoreerrors': False,
     'no_color': True,
-    'retries': 3,
-    'fragment_retries': 5,
+    'retries': 5,  # Increased retries for Instagram
+    'fragment_retries': 10,  # More fragment retries
+    'http_headers': _get_stealth_headers(),  # Use stealth headers by default
     # Instagram extractor specific options
     'extractor_args': {
         'instagram': {
             'api_dump': False,
-            'sleep_interval': 1,
+            'sleep_interval': 2,  # Increased sleep interval
+            'graphql': True,  # Use GraphQL API when possible
         }
     },
+    # General options for better Instagram compatibility
+    'sleep_interval': 2,  # Sleep between requests
+    'max_sleep_interval': 10,  # Maximum sleep interval
+    'sleep_interval_requests': 1,  # Sleep after this many requests
 }
 
 # Add ffmpeg-dependent options only if ffmpeg is available
@@ -238,31 +264,48 @@ def _build_format_candidates(quality: str | None) -> List[str]:
 
 def _is_retryable_error(error_msg: str) -> bool:
     """Check if an error is retryable based on Instagram-specific error patterns."""
+    error_lower = error_msg.lower()
     retryable_patterns = [
         # Rate limiting
         "rate limit exceeded",
         "too many requests",
         "http error 429",
+        "429",
         "temporarily unavailable",
-        # Bot detection
+        # Bot detection and blocking
         "sign in to confirm you're not a bot",
         "blocked",
         "bot",
-        # Network issues
+        "suspicious activity",
+        "unusual activity",
+        # Network and connection issues
         "connection reset",
         "timeout",
         "network is unreachable",
-        # Instagram specific
+        "connection timed out",
+        # Instagram specific errors that might be temporary
         "content not available",
         "video not available",
         "reel not available",
-        "private account",
-        "account is private",
-        # Generic
-        "try again later",
+        "post not available",
+        "this content is not available",
+        "sorry, this content isn't available",
+        # Authentication issues that might be temporary
+        "login required",
+        "authentication required",
+        "session expired",
+        # Server errors
+        "internal server error",
+        "bad gateway",
         "service unavailable",
+        "gateway timeout",
+        # Generic retry patterns
+        "try again later",
+        "please try again",
+        "temporary failure",
     ]
-    return any(pattern.lower() in error_msg.lower() for pattern in retryable_patterns)
+
+    return any(pattern in error_lower for pattern in retryable_patterns)
 
 
 async def _retry_with_backoff(func, max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 30.0):
@@ -436,21 +479,36 @@ def get_ydl_opts(download_mode: str, quality: str, proxy_url: str = None, max_it
 def _get_fallback_opts(original_opts: Dict[str, Any], cookies: str = None, temp_dir: str = None) -> Dict[str, Any]:
     """
     Generate fallback yt-dlp options with different anti-bot measures.
-    
+
     Args:
         original_opts: Original yt-dlp options
         cookies: Optional cookies string
         temp_dir: Temp directory for cookie file
-        
+
     Returns:
         Modified yt-dlp options for fallback attempt
     """
     fallback_opts = original_opts.copy()
+
+    # Increase sleep intervals for fallback
+    fallback_opts['sleep_interval'] = 5
+    fallback_opts['max_sleep_interval'] = 15
+
+    # Use different user agent for fallback
+    fallback_opts['http_headers'] = _get_stealth_headers()
+    fallback_opts['http_headers']['User-Agent'] = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1'
+
+    # Modify Instagram extractor options for fallback
+    if 'extractor_args' in fallback_opts and 'instagram' in fallback_opts['extractor_args']:
+        fallback_opts['extractor_args']['instagram']['sleep_interval'] = 5
+        fallback_opts['extractor_args']['instagram']['graphql'] = False  # Try without GraphQL
+
     # Only modify cookies if provided
     if cookies and temp_dir:
         cookie_path = os.path.join(temp_dir, 'cookies.txt')
         if os.path.exists(cookie_path):
             fallback_opts['cookiefile'] = cookie_path
+
     return fallback_opts
 
 
@@ -645,6 +703,7 @@ async def process_url(
 
         # Use temp directory for cookie file if provided
         temp_dir = None
+        cookie_path = None
         if cookies:
             temp_dir = tempfile.mkdtemp()
             cookie_path = os.path.join(temp_dir, 'cookies.txt')
@@ -654,8 +713,17 @@ async def process_url(
                     cf.write(netscape_cookies)
                 opts['cookiefile'] = cookie_path
                 Actor.log.info('Using provided cookies for authenticated extraction')  # type: ignore
+                # Add additional headers when using cookies for better authentication
+                if 'http_headers' not in opts:
+                    opts['http_headers'] = _get_stealth_headers(url)
+                opts['http_headers'].update({
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-Instagram-AJAX': '1',
+                    'X-IG-App-ID': '936619743392459',
+                })
             except Exception as e:
                 Actor.log.warning(f'Could not write cookies file: {e}')  # type: ignore
+                cookie_path = None
 
         # Extract info with retry logic
         async def extract_info():
@@ -679,7 +747,17 @@ async def process_url(
             try:
                 info = await _retry_with_backoff(extract_info_fallback, max_retries=2, base_delay=3.0)
             except Exception as fallback_error:
-                Actor.log.error(f"All extraction attempts failed for {url}")  # type: ignore
+                try:
+                    fallback_error_msg = str(fallback_error)
+                except Exception:
+                    fallback_error_msg = "Unknown fallback error"
+
+                # Check if this is an authentication-related error
+                if any(keyword in fallback_error_msg.lower() for keyword in ['login required', 'authentication required', 'not available', 'rate-limit']):
+                    Actor.log.error(f"All extraction attempts failed for {url} - Content may require authentication. Try providing Instagram cookies in the 'cookies' input parameter.")  # type: ignore
+                    Actor.log.error("To get cookies: 1) Log into Instagram in your browser, 2) Use browser dev tools to export cookies, 3) Provide them as JSON in the cookies field")  # type: ignore
+                else:
+                    Actor.log.error(f"All extraction attempts failed for {url}: {fallback_error_msg}")  # type: ignore
                 raise fallback_error
 
         if not info:

@@ -53,7 +53,62 @@ The **Instagram Video Downloader** is a powerful Apify actor designed to downloa
 | `quality` | `string` | `best` | Video quality preference: `best`, `worst`, or specific resolution |
 | `download_mode` | `string` | `video` | Download mode: `video` for video files, `audio` for audio extraction |
 | `proxy_url` | `string` | - | Custom proxy URL for enhanced privacy and access |
-| `cookies` | `string` | - | Instagram cookies for accessing private content |
+| `cookies` | `string` | - | Instagram cookies for accessing private content or bypassing rate limits. Supports JSON format or Netscape format. |
+
+### Cookie Authentication
+
+For content that requires login or to bypass rate limits, provide Instagram cookies:
+
+**Method 1: JSON Format (Recommended)**
+```json
+{
+  "urls": "https://www.instagram.com/reel/ABC123/",
+  "cookies": [
+    {
+      "name": "sessionid",
+      "value": "your_session_id_here",
+      "domain": ".instagram.com"
+    },
+    {
+      "name": "csrftoken",
+      "value": "your_csrf_token_here",
+      "domain": ".instagram.com"
+    }
+  ]
+}
+```
+
+**Method 2: Browser Export**
+1. Log into Instagram in your browser
+2. Open Developer Tools (F12)
+3. Go to Application/Storage → Cookies → instagram.com
+4. Export cookies as JSON or copy individual values
+5. Provide the exported JSON in the cookies field
+
+**Required Cookies:**
+- `sessionid`: Your Instagram session ID
+- `csrftoken`: CSRF protection token
+- `ds_user_id`: Your user ID (optional but helpful)
+
+### How to Extract Instagram Cookies
+
+**Chrome/Edge Browser:**
+1. Log into Instagram
+2. Press F12 to open Developer Tools
+3. Go to Application → Storage → Cookies → instagram.com
+4. Right-click and "Export as JSON"
+5. Copy the JSON content
+
+**Firefox Browser:**
+1. Log into Instagram
+2. Press F12 to open Developer Tools
+3. Go to Storage → Cookies → instagram.com
+4. Select all cookies, right-click → "Export"
+
+**Cookie Editor Extensions:**
+- Install "Cookie Editor" extension
+- Export cookies as JSON format
+- Copy the exported JSON
 | `max_items` | `integer` | `10` | Maximum items to download from playlists/channels |
 
 ## 📤 Output Schema
@@ -146,8 +201,19 @@ The actor generates structured JSON output for each processed video with compreh
 
 ```json
 {
-  "urls": "https://www.instagram.com/p/C3v8HnK8JdL/",
-  "cookies": "sessionid=your_session_id_here; csrftoken=your_csrf_token_here"
+  "urls": "https://www.instagram.com/reel/C3v8HnK8JdL/",
+  "cookies": [
+    {
+      "name": "sessionid",
+      "value": "your_session_id_here",
+      "domain": ".instagram.com"
+    },
+    {
+      "name": "csrftoken",
+      "value": "your_csrf_token_here",
+      "domain": ".instagram.com"
+    }
+  ]
 }
 ```
 
@@ -204,6 +270,12 @@ For enhanced privacy or accessing geo-restricted content:
 
 ### Common Issues
 
+**❌ "Content not available, rate-limit reached or login required" error**
+- **Most Common**: Instagram requires authentication for this content
+- **Solution**: Provide valid Instagram cookies in JSON format
+- **How to get cookies**: Log into Instagram → Open Dev Tools → Export cookies from Application tab
+- **Required cookies**: `sessionid`, `csrftoken`, `ds_user_id`
+
 **❌ "Video not found" error**
 - Verify the Instagram URL is correct and public
 - Check if the content requires authentication
@@ -215,14 +287,22 @@ For enhanced privacy or accessing geo-restricted content:
 - Verify Apify platform status
 
 **❌ "Private content" error**
-- Provide valid Instagram cookies
+- Provide valid Instagram cookies in JSON format
 - Ensure you have access to the content
-- Check account permissions
+- Check account permissions and content visibility
 
 **❌ "Rate limit exceeded" error**
+- Instagram has detected automated access
+- Provide cookies to appear more legitimate
 - Reduce concurrent downloads
 - Add delays between requests
-- Upgrade your Apify plan
+- Consider using residential proxies
+
+**❌ "Authentication failed" error**
+- Cookies may be expired or invalid
+- Re-export fresh cookies from your browser
+- Ensure you're logged into the correct Instagram account
+- Check that all required cookies are provided
 
 ### Error Response Format
 
@@ -236,21 +316,39 @@ For enhanced privacy or accessing geo-restricted content:
 }
 ```
 
-## 📊 Performance Tips
+## � Advanced Features
 
-- **Batch Processing**: Process multiple URLs together for better efficiency
-- **Quality Selection**: Choose appropriate quality to balance speed and file size
-- **Concurrent Limits**: Respect rate limits to avoid temporary blocks
-- **Error Handling**: Implement retry logic for failed downloads
-- **Storage Planning**: Monitor key-value store usage for large downloads
+### Enhanced Authentication
+- **Cookie Support**: Full JSON cookie format support
+- **Session Management**: Proper session handling with CSRF tokens
+- **Header Rotation**: Dynamic headers to avoid detection
 
-## 🔒 Privacy & Security
+### Robust Error Handling
+- **Smart Retry Logic**: Detects retryable vs permanent errors
+- **Fallback Strategies**: Multiple extraction methods
+- **Rate Limit Handling**: Automatic backoff and retry
 
-- All downloads are processed securely within Apify's infrastructure
-- No Instagram credentials are stored permanently
-- Content is accessible only through your Apify account
-- GDPR and privacy regulations compliant
-- Secure API endpoints with authentication
+### Instagram Optimization
+- **GraphQL Support**: Uses Instagram's modern API when available
+- **Mobile Headers**: Realistic mobile user agents for better compatibility
+- **Stealth Techniques**: Advanced anti-detection measures
+
+## ⚠️ Important Notes
+
+### Instagram Access Policies
+
+- **Rate Limiting**: Instagram actively monitors and rate-limits automated access
+- **Authentication Required**: Many videos now require login/authentication
+- **Policy Changes**: Instagram frequently updates their API and access policies
+- **Legal Compliance**: Ensure your usage complies with Instagram's Terms of Service
+
+### Best Practices
+
+- **Use Cookies**: Provide valid Instagram cookies for best results
+- **Rate Limiting**: Respect Instagram's rate limits to avoid blocks
+- **Fresh Cookies**: Re-export cookies periodically as they expire
+- **Error Handling**: Implement proper error handling for failed downloads
+- **Legal Usage**: Only download content you have permission to access
 
 ## 📞 Support & Resources
 
