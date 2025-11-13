@@ -271,7 +271,10 @@ async def _retry_with_backoff(func, max_retries: int = 3, base_delay: float = 1.
         try:
             return await func()
         except Exception as e:
-            error_msg = str(e)
+            try:
+                error_msg = str(e)
+            except Exception:
+                error_msg = "Unknown error"
             if attempt == max_retries - 1 or not _is_retryable_error(error_msg):
                 raise e
 
@@ -663,7 +666,11 @@ async def process_url(
             info = await _retry_with_backoff(extract_info, max_retries=3, base_delay=2.0)
         except Exception as e:
             # Try fallback options if initial extraction fails
-            Actor.log.warning(f"Initial extraction failed, trying fallback options: {str(e)[:100]}...")  # type: ignore
+            try:
+                error_msg = str(e)
+            except Exception:
+                error_msg = "Unknown extraction error"
+            Actor.log.warning(f"Initial extraction failed, trying fallback options: {error_msg[:100]}...")  # type: ignore
             fallback_opts = _get_fallback_opts(opts, cookies, temp_dir)
             async def extract_info_fallback():
                 with yt_dlp.YoutubeDL(fallback_opts) as ydl:
@@ -704,10 +711,14 @@ async def process_url(
         return results
 
     except Exception as e:
-        Actor.log.error(f"Failed to process {url}: {e}")  # type: ignore
+        try:
+            error_str = str(e)
+        except Exception:
+            error_str = "Unknown processing error"
+        Actor.log.error(f"Failed to process {url}: {error_str}")  # type: ignore
         return [{
             'url': url,
-            'error': str(e),
+            'error': error_str,
             'quality_requested': quality,
             'collected_at': datetime.now(UTC).isoformat(),
         }]
@@ -797,11 +808,15 @@ async def process_single_video(
         return metadata
 
     except Exception as e:
-        Actor.log.error(f"Failed to process video {info.get('id')}: {e}")  # type: ignore
+        try:
+            error_str = str(e)
+        except Exception:
+            error_str = "Unknown video processing error"
+        Actor.log.error(f"Failed to process video {info.get('id')}: {error_str}")  # type: ignore
         return {
             'video_id': info.get('id'),
             'url': info.get('webpage_url') or info.get('url'),
-            'error': str(e),
+            'error': error_str,
             'quality_requested': quality,
             'downloaded_format': None,
             'download_url': None,
@@ -911,8 +926,8 @@ async def process_urls(
         active_proxy_url = proxy_url
         if proxy_configuration is not None:
             try:
-                fresh_url = proxy_configuration.new_url()
-                active_proxy_url = fresh_url or proxy_url
+                fresh_url = await proxy_configuration.new_url()
+                active_proxy_url = str(fresh_url) if fresh_url else proxy_url
             except Exception as proxy_error:
                 Actor.log.warning(f"Unable to obtain fresh proxy URL: {proxy_error}")
                 active_proxy_url = proxy_url
@@ -930,11 +945,15 @@ async def process_urls(
             Actor.log.info(f"Processed {len(results)} items from {url}")
 
         except Exception as e:
-            Actor.log.error(f"Failed to process {url}: {e}")
+            try:
+                error_str = str(e)
+            except Exception:
+                error_str = "Unknown processing error"
+            Actor.log.error(f"Failed to process {url}: {error_str}")
             # Still push error info to dataset
             error_data = {
                 'url': url,
-                'error': str(e),
+                'error': error_str,
                 'quality_requested': quality,
                 'collected_at': datetime.now(UTC).isoformat(),
             }
@@ -1028,7 +1047,8 @@ async def main() -> None:
                 else:
                     proxy_configuration = await Actor.create_proxy_configuration()
                 if proxy_configuration:
-                    proxy_url = proxy_configuration.new_url()
+                    fresh_proxy_url = await proxy_configuration.new_url()
+                    proxy_url = str(fresh_proxy_url) if fresh_proxy_url else None
                     Actor.log.info("Using Apify proxy configuration")
             except Exception as proxy_error:
                 Actor.log.warning(f"Unable to initialize proxy configuration: {proxy_error}")
