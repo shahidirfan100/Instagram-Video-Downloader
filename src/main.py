@@ -136,6 +136,7 @@ CONTENT_TYPE_BY_EXTENSION = {
 # ============================================================ #
 
 # Base yt-dlp options optimized for Instagram
+# Base yt-dlp options - will be modified based on ffmpeg availability
 BASE_YDL_OPTS = {
     'quiet': True,
     'no_warnings': True,
@@ -143,8 +144,6 @@ BASE_YDL_OPTS = {
     'nocheckcertificate': True,
     'ignoreerrors': False,
     'no_color': True,
-    'merge_output_format': 'mp4',
-    'format_sort': ['res', 'fps', 'vcodec:h264', 'acodec:m4a', 'ext:mp4:m4a'],
     'retries': 3,
     'fragment_retries': 5,
     # Instagram extractor specific options
@@ -155,6 +154,17 @@ BASE_YDL_OPTS = {
         }
     },
 }
+
+# Add ffmpeg-dependent options only if ffmpeg is available
+if FFMPEG_AVAILABLE:
+    BASE_YDL_OPTS.update({
+        'merge_output_format': 'mp4',
+        'format_sort': ['res', 'fps', 'vcodec:h264', 'acodec:m4a', 'ext:mp4:m4a'],
+    })
+else:
+    BASE_YDL_OPTS.update({
+        'format_sort': ['res', 'fps', 'ext:mp4:m4a'],
+    })
 
 # Quality labels retained for reference (fallback helper uses these)
 QUALITY_FORMATS = {
@@ -172,25 +182,49 @@ def _build_format_candidates(quality: str | None) -> List[str]:
     if q in {'audio_only', 'audio'}:
         candidates = ['bestaudio/best', 'best']
     elif q in {'1080p', '1080'}:
-        candidates = [
-            'bestvideo*[height<=1080][fps<=60]+bestaudio/best[height<=1080]',
-            'bestvideo*[height<=1080]+bestaudio/best',
-            'bestvideo[height<=1440]+bestaudio/best',
-            'best',
-        ]
+        # Use formats that don't require merging if ffmpeg is not available
+        if FFMPEG_AVAILABLE:
+            candidates = [
+                'bestvideo*[height<=1080][fps<=60]+bestaudio/best[height<=1080]',
+                'bestvideo*[height<=1080]+bestaudio/best',
+                'bestvideo[height<=1440]+bestaudio/best',
+                'best',
+            ]
+        else:
+            candidates = [
+                'best[height<=1080]',
+                'bestvideo[height<=1080]',
+                'best',
+            ]
     elif q in {'720p', '720'}:
-        candidates = [
-            'bestvideo*[height<=720][fps<=60]+bestaudio/best[height<=720]',
-            'bestvideo*[height<=720]+bestaudio/best',
-            'bestvideo[height<=1080]+bestaudio/best',
-            'best',
-        ]
+        # Use formats that don't require merging if ffmpeg is not available
+        if FFMPEG_AVAILABLE:
+            candidates = [
+                'bestvideo*[height<=720][fps<=60]+bestaudio/best[height<=720]',
+                'bestvideo*[height<=720]+bestaudio/best',
+                'bestvideo[height<=1080]+bestaudio/best',
+                'best',
+            ]
+        else:
+            candidates = [
+                'best[height<=720]',
+                'bestvideo[height<=720]',
+                'best',
+            ]
     else:
-        candidates = [
-            'bestvideo*+bestaudio/best',
-            'bestvideo+bestaudio/best',
-            'best',
-        ]
+        # Use formats that don't require merging if ffmpeg is not available
+        if FFMPEG_AVAILABLE:
+            candidates = [
+                'bestvideo*+bestaudio/best',
+                'bestvideo+bestaudio/best',
+                'best',
+            ]
+        else:
+            candidates = [
+                'best',
+                'bestvideo',
+                'bestaudio',
+            ]
 
     # Deduplicate while preserving order
     seen: set[str] = set()
@@ -583,13 +617,19 @@ async def process_url(
             try:
                 # Try different scrapling APIs based on version
                 if hasattr(scrapling, 'Browser'):
-                    browser = scrapling.Browser(stealth=True, headless=True)
-                    page = browser.goto(url)
-                    page_html = page.html
-                    browser.close()
+                    try:
+                        browser = scrapling.Browser(stealth=True, headless=True)
+                        page = browser.goto(url)
+                        page_html = page.html
+                        browser.close()
+                    except Exception as e:
+                        Actor.log.warning(f"Scrapling Browser failed: {e}")  # type: ignore
                 elif hasattr(scrapling, 'Scraper'):
-                    scraper = scrapling.Scraper()
-                    page_html = scraper.scrape(url).html
+                    try:
+                        scraper = scrapling.Scraper()
+                        page_html = scraper.scrape(url).html
+                    except Exception as e:
+                        Actor.log.warning(f"Scrapling Scraper failed: {e}")  # type: ignore
                 else:
                     Actor.log.warning("Scrapling version incompatible - Browser/Scraper not available")  # type: ignore
                 if page_html:
@@ -980,8 +1020,11 @@ async def main() -> None:
                 if proxy_input:
                     # Filter out invalid parameters that the SDK doesn't accept
                     valid_proxy_params = {k: v for k, v in proxy_input.items() 
-                                        if k not in ['useApifyProxy']}
-                    proxy_configuration = await Actor.create_proxy_configuration(**valid_proxy_params)
+                                        if k not in ['useApifyProxy', 'apifyProxyGroups', 'apifyProxyCountry']}
+                    if valid_proxy_params:
+                        proxy_configuration = await Actor.create_proxy_configuration(**valid_proxy_params)
+                    else:
+                        proxy_configuration = await Actor.create_proxy_configuration()
                 else:
                     proxy_configuration = await Actor.create_proxy_configuration()
                 if proxy_configuration:
